@@ -85,29 +85,35 @@ class KalshiDataCollector:
         print(f"[OK] Total markets fetched: {len(all_markets)}")
         return all_markets
 
-    def fetch_market_candlesticks(self, ticker: str, period_interval: int = 1440,
+    def fetch_market_candlesticks(self, ticker: str, event_ticker: str = None, period_interval: int = 1440,
                                    start_ts: Optional[int] = None, end_ts: Optional[int] = None) -> Optional[List[Dict]]:
         """
-        Fetch candlestick data for a specific market
+        Fetch candlestick data for a specific market using the series endpoint
 
         Args:
             ticker: Market ticker
+            event_ticker: Event ticker (required for API call)
             period_interval: 1 (1min), 60 (1hr), 1440 (1day)
-            start_ts: Optional start timestamp
-            end_ts: Optional end timestamp
+            start_ts: Start timestamp (REQUIRED by API)
+            end_ts: End timestamp (REQUIRED by API)
 
         Returns:
             List of candlestick dictionaries or None
         """
-        url = f"{BASE_URL}/markets/{ticker}/candlesticks"
-        params = {
-            'period_interval': period_interval
-        }
+        if not event_ticker:
+            print(f"  Warning: event_ticker required for candlesticks endpoint")
+            return None
 
-        if start_ts:
-            params['start_ts'] = start_ts
-        if end_ts:
-            params['end_ts'] = end_ts
+        if not start_ts or not end_ts:
+            print(f"  Warning: start_ts and end_ts are required by Kalshi API")
+            return None
+
+        url = f"{BASE_URL}/series/{event_ticker}/markets/{ticker}/candlesticks"
+        params = {
+            'period_interval': period_interval,
+            'start_ts': start_ts,
+            'end_ts': end_ts
+        }
 
         try:
             response = self.session.get(url, params=params)
@@ -115,7 +121,7 @@ class KalshiDataCollector:
             data = response.json()
             return data.get('candlesticks', [])
         except requests.exceptions.RequestException as e:
-            print(f"  Warning: Could not fetch candlesticks for {ticker}: {e}")
+            print(f"  Warning: Could not fetch candlesticks for {ticker} (event: {event_ticker}): {e}")
             return None
 
 
@@ -389,12 +395,20 @@ def export_market_historical_data(collector: KalshiDataCollector,
                 response = collector.session.get(f"{BASE_URL}/markets/{ticker}")
                 if response.ok:
                     market_data = response.json()['market']
+                    # Parse open_time and close_time from API
+                    open_time = None
+                    close_time = None
+                    if market_data.get('open_time'):
+                        open_time = pd.to_datetime(market_data['open_time'])
+                    if market_data.get('close_time'):
+                        close_time = pd.to_datetime(market_data['close_time'])
+
                     markets_to_export.append({
                         'ticker': ticker,
                         'title': market_data.get('title', 'N/A'),
                         'volume_usd': None,
-                        'open_time': None,
-                        'close_time': None,
+                        'open_time': open_time,
+                        'close_time': close_time,
                         'event_ticker': market_data.get('event_ticker')
                     })
                 else:
@@ -505,18 +519,27 @@ def export_market_historical_data(collector: KalshiDataCollector,
         if volume_usd:
             print(f"      Volume: ${volume_usd:,.2f}")
 
-        # Determine start time: market open or months_back ago, whichever is later
+        # Determine start time: market open or months_back ago, whichever is LATER (more recent)
+        # This prevents fetching data before the market existed
         if open_time and pd.notna(open_time):
+            # Parse string to datetime if needed
+            if isinstance(open_time, str):
+                open_time = datetime.fromisoformat(open_time.replace('Z', '+00:00'))
             market_open_ts = int(open_time.timestamp())
+            # Always start from market open if it's more recent than months_back
             start_ts = max(market_open_ts, months_back_ts)
             start_source = "market open" if start_ts == market_open_ts else f"{months_back} months ago"
         else:
+            # If no open_time available, use months_back but warn user
             start_ts = months_back_ts
-            start_source = f"{months_back} months ago"
+            start_source = f"{months_back} months ago (no market open time available)"
 
         # End time: market close or now, whichever is earlier (can't get future data)
         now_ts = int(datetime.now().timestamp())
         if close_time and pd.notna(close_time):
+            # Parse string to datetime if needed
+            if isinstance(close_time, str):
+                close_time = datetime.fromisoformat(close_time.replace('Z', '+00:00'))
             end_ts = min(int(close_time.timestamp()), now_ts)
         else:
             end_ts = now_ts
@@ -645,6 +668,55 @@ def export_market_historical_data(collector: KalshiDataCollector,
 
                 # Add human-readable timestamp
                 cs_df['datetime'] = pd.to_datetime(cs_df['timestamp'], unit='s')
+
+                # Gap-fill: Create continuous time series
+                # Build complete index of expected timestamps
+                if len(cs_df) > 0:
+                    # Determine interval in seconds
+                    interval_seconds = period_interval * 60  # period_interval is in minutes
+
+                    # Create complete datetime range
+                    start_dt = cs_df['datetime'].min()
+                    end_dt = cs_df['datetime'].max()
+                    complete_range = pd.date_range(start=start_dt, end=end_dt, freq=f'{period_interval}min')
+
+                    # Mark original data as from API
+                    cs_df['source'] = 'api'
+
+                    # Set datetime as index for reindexing
+                    cs_df = cs_df.set_index('datetime')
+
+                    # Reindex to complete range
+                    cs_df_filled = cs_df.reindex(complete_range)
+
+                    # Mark imputed rows
+                    cs_df_filled['source'] = cs_df_filled['source'].fillna('imputed')
+
+                    # Forward-fill price fields (using last known price)
+                    price_fields = ['open', 'high', 'low', 'close',
+                                   'yes_ask_open', 'yes_ask_high', 'yes_ask_low', 'yes_ask_close',
+                                   'yes_bid_open', 'yes_bid_high', 'yes_bid_low', 'yes_bid_close']
+                    for field in price_fields:
+                        if field in cs_df_filled.columns:
+                            cs_df_filled[field] = cs_df_filled[field].ffill()
+
+                    # Fill volume with 0 for imputed rows
+                    if 'volume' in cs_df_filled.columns:
+                        cs_df_filled['volume'] = cs_df_filled['volume'].fillna(0)
+
+                    # Forward-fill open_interest
+                    if 'open_interest' in cs_df_filled.columns:
+                        cs_df_filled['open_interest'] = cs_df_filled['open_interest'].ffill()
+
+                    # Reconstruct timestamp from index
+                    cs_df_filled['datetime'] = cs_df_filled.index
+                    cs_df_filled['timestamp'] = (cs_df_filled['datetime'].astype(int) // 10**9).astype(int)
+                    cs_df_filled = cs_df_filled.reset_index(drop=True)
+
+                    # Use filled dataframe
+                    cs_df = cs_df_filled
+
+                    print(f"      [INFO] Gap-filled: {(cs_df['source'] == 'imputed').sum()} imputed candles, {(cs_df['source'] == 'api').sum()} from API")
 
                 # Convert prices from cents to USD
                 price_cols = ['open', 'high', 'low', 'close',

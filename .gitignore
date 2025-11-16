@@ -1,0 +1,26 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Data files (generated)
+*.csv
+*.png
+*.json
+
+# Market data directory
+market_data/
+
+# IDE
+.vscode/
+.idea/
+
+# API keys (if accidentally committed)
+*_keys.py
+secrets.py
+
+# OS files
+.DS_Store
+Thumbs.db
