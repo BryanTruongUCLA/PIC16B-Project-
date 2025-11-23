@@ -683,6 +683,9 @@ def export_market_historical_data(collector: KalshiDataCollector,
                     # Mark original data as from API
                     cs_df['source'] = 'api'
 
+                    # Remove duplicate timestamps (keep first occurrence)
+                    cs_df = cs_df.drop_duplicates(subset=['datetime'], keep='first')
+
                     # Set datetime as index for reindexing
                     cs_df = cs_df.set_index('datetime')
 
