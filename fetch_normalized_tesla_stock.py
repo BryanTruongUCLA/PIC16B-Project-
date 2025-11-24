@@ -11,7 +11,7 @@ import requests
 import matplotlib.pyplot as plt
 
 # Configuration
-EODHD_API_KEY = "API-Key-Here"
+EODHD_API_KEY = "6918f440b08f73.14158490"
 MARKET_DATA_DIR = "market_data"
 OUTPUT_FILE = "normalized_tesla_stock_1min.csv"
 VISUALIZATION_FILE = "normalized_tesla_stock_1min.png"
@@ -19,46 +19,39 @@ VISUALIZATION_FILE = "normalized_tesla_stock_1min.png"
 
 def get_market_data_timerange() -> tuple:
     """
-    Scan all market data CSVs to find the min and max datetime range
+    Read tesla_markets_1min_combined.csv to find the min and max datetime range
 
     Returns:
         (start_datetime, end_datetime) tuple
     """
-    print("Scanning market data to determine time range...")
+    print("Reading tesla_markets_1min_combined.csv to determine time range...")
 
-    if not os.path.exists(MARKET_DATA_DIR):
-        print(f"  [ERROR] {MARKET_DATA_DIR} directory not found")
+    combined_file = "tesla_markets_1min_combined.csv"
+
+    if not os.path.exists(combined_file):
+        print(f"  [ERROR] {combined_file} not found")
+        print(f"         Please run download_tesla_data.py first to generate this file")
         return None, None
 
-    all_datetimes = []
-    csv_files = [f for f in os.listdir(MARKET_DATA_DIR) if f.endswith('_historical_1min.csv')]
+    try:
+        df = pd.read_csv(combined_file)
 
-    if len(csv_files) == 0:
-        print(f"  [ERROR] No 1-minute market data files found in {MARKET_DATA_DIR}")
+        if 'datetime' not in df.columns or len(df) == 0:
+            print(f"  [ERROR] No datetime data found in {combined_file}")
+            return None, None
+
+        df['datetime'] = pd.to_datetime(df['datetime'])
+        start_dt = df['datetime'].min()
+        end_dt = df['datetime'].max()
+
+        print(f"  [OK] Market data range: {start_dt} to {end_dt}")
+        print(f"       Duration: {(end_dt - start_dt).total_seconds() / 3600:.1f} hours")
+
+        return start_dt, end_dt
+
+    except Exception as e:
+        print(f"  [ERROR] Error reading {combined_file}: {e}")
         return None, None
-
-    for csv_file in csv_files:
-        csv_path = os.path.join(MARKET_DATA_DIR, csv_file)
-        try:
-            df = pd.read_csv(csv_path)
-            if 'datetime' in df.columns and len(df) > 0:
-                df['datetime'] = pd.to_datetime(df['datetime'])
-                all_datetimes.extend(df['datetime'].tolist())
-        except Exception as e:
-            print(f"  [WARN] Error reading {csv_file}: {e}")
-            continue
-
-    if len(all_datetimes) == 0:
-        print("  [ERROR] No datetime data found in market files")
-        return None, None
-
-    start_dt = min(all_datetimes)
-    end_dt = max(all_datetimes)
-
-    print(f"  [OK] Market data range: {start_dt} to {end_dt}")
-    print(f"       Duration: {(end_dt - start_dt).total_seconds() / 3600:.1f} hours")
-
-    return start_dt, end_dt
 
 
 def fetch_stock_data_1min(symbol: str, start_dt: datetime, end_dt: datetime) -> pd.DataFrame:

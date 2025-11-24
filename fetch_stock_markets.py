@@ -10,12 +10,13 @@ import time
 import re
 from datetime import datetime, timezone
 from typing import List, Dict, Optional
+
+# Try to import BeautifulSoup for web scraping
 try:
     from bs4 import BeautifulSoup
     HAS_BS4 = True
 except ImportError:
     HAS_BS4 = False
-    print("[WARN] beautifulsoup4 not installed. Web scraping verification disabled.")
 
 # API Configuration
 BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
