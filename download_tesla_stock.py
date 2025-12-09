@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import time
 
 # Configuration
-EODHD_API_KEY = "6918f440b08f73.14158490"
+EODHD_API_KEY = "API Key here"
 OUTPUT_FILE = "normalized_tesla_stock_1min.csv"
 
 # Calculate date range 6 months back from time of running
